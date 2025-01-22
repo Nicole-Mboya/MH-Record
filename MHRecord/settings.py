@@ -13,8 +13,40 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 from datetime import timedelta
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+import environ
+import os
+from django.shortcuts import render
+
+
+# Initialize environment variables
+env = environ.Env()
+environ.Env.read_env()  # Read .env file
+
+# SECRET_KEY from environment variable or fallback to a default
+SECRET_KEY = env('DJANGO_SECRET_KEY', default='default-insecure-secret-key')
+
+
+import os
+
+# Base directory for the project
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Static files settings
+STATIC_URL = '/static/'
+
+# For development, if you're serving static files from the frontend React app (during dev):
+STATICFILES_DIRS = [os.path.join(BASE_DIR, './frontend/build/static')]
+
+# For production, you'll collect static files into a folder for serving
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+
+
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'
+
+def index(request):
+    # Serve the built React index.html file
+    return render(request, 'frontend/build/index.html')
 
 
 # Quick-start development settings - unsuitable for production
@@ -25,26 +57,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    '127.0.0.1' , 'localhost',
+]
 
 
 # Application definition
 
 INSTALLED_APPS = [
-    # Default Django apps
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Third-party apps
-    'rest_framework',  # Django REST Framework for APIs
-    'django.contrib.sites',  # For handling user sites (optional for certain setups)
 
-    # Your app
-    'Record',  # Replace with the name of your app (e.g., 'emotion_tracking')
+    # Optional but recommended
+    'django.contrib.sites',
+    'django.contrib.humanize',
+    'corsheaders',
+    # Third-party apps
+    'rest_framework',          # Django REST Framework
+    'crispy_forms',            # Enhanced form rendering
+    'django_extensions',       # Extended management commands
+
+    # Your apps
+    'Record',                   # Your custom app
 ]
+
 
 
 # settings.py
@@ -57,6 +97,7 @@ SESSION_COOKIE_SECURE = False  # Set to True if using HTTPS in production
 
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # CORS middleware must be placed first
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -64,6 +105,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
 
 
 
@@ -145,7 +187,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
-STATIC_URL = 'static/'
+
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -153,11 +195,6 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # JWT Authentication settings (use if you are using simplejwt)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React app running on localhost during development
-]
-
-CORS_ALLOW_ALL_ORIGINS = True  # For development only
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
