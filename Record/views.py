@@ -1,89 +1,111 @@
-from django.contrib.auth import authenticate, login
+from django.contrib.auth import authenticate, login, logout
 from django.shortcuts import render
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseRedirect
 from django.contrib.auth.decorators import login_required
-from rest_framework import viewsets
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import viewsets, status
 from rest_framework.response import Response
-from django.db import models
-from .models import Appointment, AppointmentNote, Patient, EmotionLog, Register
-from .serializers import AppointmentSerializer, AppointmentNoteSerializer, PatientRecordSerializer, EmotionLogSerializer, JournalEntrySerializer
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
-from datetime import datetime, timedelta
-from django.utils import timezone
-from django.contrib.auth.models import AbstractUser, Group, Permission
-from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import api_view
+from datetime import timedelta
+from django.utils import timezone
+from .models import (
+    Appointment, AppointmentNote, Patient, EmotionLog, Register, MentalHealthHistory
+)
+from .serializers import (
+    AppointmentSerializer, AppointmentNoteSerializer, PatientRecordSerializer,
+    EmotionLogSerializer, JournalEntrySerializer
+)
+import logging
 
+# Logger setup
+logger = logging.getLogger(__name__)
+
+# Home View
 def home(request):
-    return render(request='home.html')
+    return render(request, 'index.html')
 
+# Registration View (API)
 @api_view(['POST'])
 def register_view(request):
-    if request.method == 'POST':
-        data = request.data
-        try:
-            user = Register.objects.create_user(
-                username=data['username'],
-                password=data['password'],
-                email=data['email'],
-                role = user.role if user.role else 'patient'
+    data = request.data
+    try:
+        # Create a new user instance with role
+        new_user = Register.objects.create_user(
+            username=data['username'],
+            password=data['password'],
+            email=data['email'],
+            role=data.get('role', 'patient')  # Default role is 'patient'
+        )
+        return Response({"message": "User created successfully!"}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.error(f"Error during registration: {e}")
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-            )
-            user.save()  # This will trigger the save method in Register to assign them to the correct group
-            return Response({"message": "User created successfully!"}, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-# Login view
+# Login View (handles POST requests)
+@csrf_exempt  # To handle CSRF issues, you can remove this if you're using CSRF tokens.
 def login_view(request):
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
-        
-        # Authenticate user
+
+        logger.info(f"Attempting login for username: {username}")
+
         user = authenticate(request, username=username, password=password)
-        
+
         if user is not None:
-            login(request, user)  # Start session
-            # Redirect based on role
-            if user.role == 'doctor':
-                return JsonResponse({'redirect_url': '/doctor-dashboard/'})
-            elif user.role == 'patient':
-                return JsonResponse({'redirect_url': '/patient-dashboard/'})
-            return JsonResponse({'redirect_url': '/'})  # Default fallback
-        return JsonResponse({'error': 'Invalid credentials'}, status=401)
+            login(request, user)
+            logger.info(f"Login successful for username: {username}")
+
+            # Redirect based on user role
+            if hasattr(user, 'role'):
+                if user.role == 'doctor':
+                    return JsonResponse({'redirect_url': '/doctor-dashboard/'})
+                elif user.role == 'patient':
+                    return JsonResponse({'redirect_url': '/patient-dashboard/'})
+            return JsonResponse({'redirect_url': '/'})  # Default fallback for other roles
+        else:
+            logger.warning(f"Login failed for username: {username}")
+            return JsonResponse({'error': 'Invalid credentials'}, status=401)
 
     return render(request, 'login.html')
 
-# Doctor's Dashboard view
+# Logout View (for logged-in users)
+@login_required
+def logout_view(request):
+    logout(request)
+    return HttpResponseRedirect('/')  # Redirect to home after logout
+
+# Doctor Dashboard View
 @login_required
 def doctor_dashboard(request):
     return render(request, 'doctor_dashboard.html')
 
-# Patient's Dashboard view
+# Patient Dashboard View
 @login_required
 def patient_dashboard(request):
     return render(request, 'patient_dashboard.html')
 
+# Patient Records View
 class PatientRecordsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        
+
         if not user.is_authenticated:
             return Response({"error": "Authentication required."}, status=401)
 
-        # Get all patients assigned to this doctor
-        patients = Patient.objects.all()  # You can filter this based on the doctor's permissions
-        
+        # Fetch all patients (can be filtered based on permissions or doctor assignment)
+        patients = Patient.objects.all()
         patient_records = []
+
         for patient in patients:
             appointments = Appointment.objects.filter(patient=patient)
             notes = AppointmentNote.objects.filter(appointment__in=appointments)
             mental_health_history = MentalHealthHistory.objects.filter(patient=patient)
-            
+
             patient_data = {
                 'patient_id': patient.id,
                 'patient_name': patient.user.username,
@@ -91,30 +113,32 @@ class PatientRecordsView(APIView):
                 'gender': patient.gender,
                 'appointments': appointments.values('id', 'date', 'is_cancelled'),
                 'notes': notes.values('note'),
-                'mental_health_history': mental_health_history.values('date_recorded', 'mental_health_status')
+                'mental_health_history': mental_health_history.values('date_recorded', 'mental_health_status'),
             }
             patient_records.append(patient_data)
 
         return Response(patient_records)
 
+# Emotion Log View
 class EmotionLogView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        """Return the last 3 emotion logs of the patient"""
         logs = EmotionLog.objects.filter(patient=request.user).order_by('-created_at')[:3]
         log_data = [{'emotion': log.emotion, 'created_at': log.created_at} for log in logs]
         return Response(log_data, status=200)
 
+# Emotion Log Chart View
 class EmotionLogChartView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, days=7):
-        """Fetch emotion log data for the last 7 or 30 days"""
         end_date = timezone.now()
         start_date = end_date - timedelta(days=days)
 
-        # Get emotion logs for the logged-in user
         logs = EmotionLog.objects.filter(
-            patient=request.user, 
-            created_at__gte=start_date,
-            created_at__lte=end_date
+            patient=request.user,
+            created_at__range=(start_date, end_date)
         ).values('emotion', 'created_at__date')
 
         emotion_data = {}
@@ -128,22 +152,19 @@ class EmotionLogChartView(APIView):
             emotion_data[date][emotion] += 1
 
         chart_data = {
-            'labels': [],
+            'labels': sorted(emotion_data.keys()),
             'datasets': []
         }
 
-        emotions = set([log['emotion'] for log in logs])
-        for emotion in emotions:
+        all_emotions = set([log['emotion'] for log in logs])
+        for emotion in all_emotions:
             dataset = {
                 'label': emotion,
-                'data': [],
+                'data': [emotion_data[date].get(emotion, 0) for date in sorted(emotion_data.keys())],
                 'backgroundColor': 'rgba(75, 192, 192, 0.2)',
                 'borderColor': 'rgba(75, 192, 192, 1)',
                 'borderWidth': 1
             }
-            for date in sorted(emotion_data.keys()):
-                chart_data['labels'].append(date)
-                dataset['data'].append(emotion_data[date].get(emotion, 0))
             chart_data['datasets'].append(dataset)
 
         return Response(chart_data, status=200)
